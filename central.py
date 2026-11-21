@@ -29,7 +29,7 @@ def sql(query, args=(), fetch=False):
         conn.close()
 
 def telegram(method, **kwargs):
-    response = requests.post(BASE + method, json=kwargs, timeout=20)
+    response = requests.post(BASE + method, json=kwargs, timeout=(10, max(35, int(kwargs.get("timeout", 0)) + 10)))
     response.raise_for_status()
     data = response.json()
     if not data.get("ok"):
