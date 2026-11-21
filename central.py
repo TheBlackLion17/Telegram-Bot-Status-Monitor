@@ -40,24 +40,33 @@ def send(text, chat=CHANNEL):
     return telegram("sendMessage", chat_id=chat, text=text, parse_mode="HTML", disable_web_page_preview=True)
 
 def dashboard():
-    rows = sql("""SELECT b.display_name,b.service,b.status,b.updated_at,s.name AS server_name,s.last_seen
+    rows = sql("""SELECT b.display_name,b.service,b.status,b.updated_at,b.category,
+        s.name AS server_name,s.last_seen
         FROM monitored_bots b LEFT JOIN servers s ON s.id=b.server_id
-        WHERE b.enabled=1 ORDER BY s.name,b.display_name""", fetch=True)
+        WHERE b.enabled=1 ORDER BY b.category,b.display_name""", fetch=True)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    lines = ["🤖 <b>AGS BOTS — LIVE STATUS</b>", ""]
+    lines = ["🤖 <b>AGS MODS | BOTS LIST</b>", "━━━━━━━━━━━━━━━━━━━━"]
     counts = {"online": 0, "offline": 0, "unknown": 0}
+    groups = {}
     for row in rows:
         stale = not row["last_seen"] or (now-row["last_seen"]).total_seconds() > 1200
         status = "unknown" if stale else row["status"]
         counts[status] = counts.get(status, 0) + 1
-        icon = {"online": "🟢", "offline": "🔴", "unknown": "⚪"}.get(status, "⚪")
-        lines.append(f'{icon} {html.escape(row["display_name"])} — {status.upper()}')
-        lines.append(f'   └ {html.escape(row["server_name"] or "Unregistered")}')
+        category = row["category"] or "Other Bots"
+        groups.setdefault(category, []).append((row, status))
+    preferred = ["Music", "File Share Bots", "Other Bots"]
+    for category in sorted(groups, key=lambda c: (preferred.index(c) if c in preferred else len(preferred), c.lower())):
+        lines.extend(["", "┏━━━━━━━━━━━━━━━━━━", "┃ 📁 <b>" + html.escape(category) + "</b>", "┣━━━━━━━━━━━━━━━━━━"])
+        for row, status in groups[category]:
+            icon = {"online": "🟢", "offline": "🔴", "unknown": "⚪"}[status]
+            lines.append("┃ ┗ " + icon + " <b>" + html.escape(row["display_name"]) + "</b>")
+            lines.append("┃    " + html.escape(row["server_name"] or row["service"]) + " · " + status.upper())
+        lines.append("┗━━━━━━━━━━━━━━━━━━")
     if not rows:
-        lines.append("No bots selected. Owner: use /addbot server_id service Display Name")
-    lines.extend(["", f'🟢 {counts["online"]} Online  🔴 {counts["offline"]} Offline  ⚪ {counts["unknown"]} Unknown',
-        "🕒 Updated " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")])
-    return "\n".join(lines)
+        lines.append("No bots selected. Use /addbot SERVER_ID SERVICE Display Name")
+    lines.extend(["", "🟢 " + str(counts["online"]) + " Online   🔴 " + str(counts["offline"]) + " Offline   ⚪ " + str(counts["unknown"]) + " Unknown",
+                  "🕒 Updated " + now.strftime("%d %b %Y · %H:%M UTC")])
+    return "\n".join(lines)[:4000]
 
 def update_dashboard():
     with lock:
@@ -131,9 +140,20 @@ def command(text, chat):
     elif cmd == "/refresh":
         update_dashboard()
         send("Dashboard refreshed.", chat)
+    elif cmd == "/setcategory":
+        if len(parts) < 4:
+            send("Usage: /setcategory SERVER_ID SERVICE Category Name", chat)
+            return
+        category = " ".join(parts[3:]).strip()
+        if len(category) > 80:
+            send("Category too long (maximum 80 characters).", chat)
+            return
+        sql("UPDATE monitored_bots SET category=%s WHERE server_id=%s AND service=%s",
+            (category, parts[1], parts[2]))
+        send("Category saved. Use /refresh to update the channel.", chat)
     elif cmd == "/listbots":
-        rows = sql("SELECT server_id,service,display_name,enabled FROM monitored_bots ORDER BY server_id,service", fetch=True)
-        send("\n".join(f'{html.escape(r["server_id"])} | {html.escape(r["service"])} | {html.escape(r["display_name"])} | {"enabled" if r["enabled"] else "disabled"}' for r in rows)[:3900] or "No bots configured.",chat)
+        rows = sql("SELECT server_id,service,display_name,category,enabled FROM monitored_bots ORDER BY server_id,service", fetch=True)
+        send("\n".join(f'{html.escape(r["server_id"])} | {html.escape(r["service"])} | {html.escape(r["display_name"])} | {html.escape(r["category"])} | {"enabled" if r["enabled"] else "disabled"}' for r in rows)[:3900] or "No bots configured.",chat)
     elif cmd == "/addbot":
         if len(parts) < 4 or parts[1] not in KEYS:
             send("Usage: /addbot SERVER_ID SERVICE Display Name\nSERVER_ID must be configured in AGENT_KEYS.", chat)
