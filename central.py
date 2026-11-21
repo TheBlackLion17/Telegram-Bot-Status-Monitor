@@ -60,7 +60,7 @@ def dashboard():
         for row, status in groups[category]:
             icon = {"online": "🟢", "offline": "🔴", "unknown": "⚪"}[status]
             lines.append("┃ ┗ " + icon + " <b>" + html.escape(row["display_name"]) + "</b>")
-            lines.append("┃    " + html.escape(row["server_name"] or row["service"]) + " · " + status.upper())
+            lines.append("┃    Status: " + status.upper())
         lines.append("┗━━━━━━━━━━━━━━━━━━")
     if not rows:
         lines.append("No bots selected. Use /addbot SERVER_ID SERVICE Display Name")
@@ -144,7 +144,7 @@ def report():
             if old != "unknown" and state != "unknown":
                 icon = "🔴" if state == "offline" else "🟢"
                 try:
-                    send(f'{icon} <b>{html.escape(row["display_name"])}</b> is {state.upper()}\nServer: {html.escape(server)}')
+                    send(f'{icon} <b>{html.escape(row["display_name"])}</b> is {state.upper()}')
                 except Exception:
                     logging.exception("Alert delivery failed")
     return jsonify(ok=True)
