@@ -1,0 +1,13 @@
+[Unit]
+Description=AGS Bot Status Agent
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=/opt/ags-status-monitor
+EnvironmentFile=/opt/ags-status-monitor/.env
+ExecStart=/opt/ags-status-monitor/venv/bin/python /opt/ags-status-monitor/agent.py
+Restart=always
+RestartSec=10
+[Install]
+WantedBy=multi-user.target
