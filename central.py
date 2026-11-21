@@ -134,7 +134,7 @@ def command(text, chat):
         return
     cmd = parts[0].split("@")[0].lower()
     if cmd in ("/start", "/help"):
-        send("AGS Monitor owner commands:\n/status /refresh\n/addbot SERVER_ID SERVICE Display Name\n/removebot SERVER_ID SERVICE\n/listbots\nServices: systemd unit or pm2:name", chat)
+        send("AGS Monitor owner commands:\n/status /refresh\n/addbot SERVER_ID SERVICE Display Name\n/removebot SERVER_ID SERVICE\n/setcategory SERVER_ID SERVICE Category Name\n/listbots\nServices: systemd unit or pm2:name", chat)
     elif cmd == "/status":
         send(dashboard(), chat)
     elif cmd == "/refresh":
