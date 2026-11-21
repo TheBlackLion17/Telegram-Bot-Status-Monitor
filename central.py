@@ -1,4 +1,4 @@
-import os, time, threading, logging, html
+import os, time, threading, logging, html, hashlib, hmac, re
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify, abort
 import pymysql, requests
@@ -10,7 +10,7 @@ app = Flask(__name__)
 TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL = os.environ["CHANNEL_ID"]
 OWNER = int(os.environ["OWNER_ID"])
-KEYS = dict(part.split(":", 1) for part in os.environ["AGENT_KEYS"].split(",") if ":" in part)
+KEYS = dict(part.split(":", 1) for part in os.getenv("AGENT_KEYS", "").split(",") if ":" in part)
 BASE = "https://api.telegram.org/bot" + TOKEN + "/"
 lock = threading.Lock()
 
@@ -89,7 +89,28 @@ def update_dashboard():
             logging.exception("Pin failed: check channel permissions")
 
 def authorized(server, key):
-    return bool(server and key and KEYS.get(server) == key)
+    if not server or not key:
+        return False
+    rows = sql("SELECT key_hash,enabled FROM agent_credentials WHERE server_id=%s", (server,), True)
+    if rows:
+        return bool(rows[0]["enabled"] and hmac.compare_digest(rows[0]["key_hash"], hashlib.sha256(key.encode()).hexdigest()))
+    legacy = KEYS.get(server)
+    return bool(legacy and hmac.compare_digest(legacy, key))
+
+def registered(server):
+    rows = sql("SELECT enabled FROM agent_credentials WHERE server_id=%s", (server,), True)
+    return bool(rows[0]["enabled"]) if rows else server in KEYS
+
+def valid_server_id(server):
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]{1,80}", server))
+
+def save_server_key(server, key):
+    digest = hashlib.sha256(key.encode()).hexdigest()
+    sql("""INSERT INTO agent_credentials(server_id,key_hash,enabled)
+        VALUES(%s,%s,1) ON DUPLICATE KEY UPDATE key_hash=VALUES(key_hash),enabled=1""", (server,digest))
+    sql("""INSERT INTO servers(id,name,last_seen) VALUES(%s,%s,NULL)
+        ON DUPLICATE KEY UPDATE id=VALUES(id)""", (server,server))
+
 
 @app.get("/services")
 def services():
@@ -134,7 +155,33 @@ def command(text, chat):
         return
     cmd = parts[0].split("@")[0].lower()
     if cmd in ("/start", "/help"):
-        send("AGS Monitor owner commands:\n/status /refresh\n/addbot SERVER_ID SERVICE Display Name\n/removebot SERVER_ID SERVICE\n/setcategory SERVER_ID SERVICE Category Name\n/listbots\nServices: systemd unit or pm2:name", chat)
+        send("AGS Monitor owner commands:\n/status /refresh\n/addbot SERVER_ID SERVICE Display Name\n/removebot SERVER_ID SERVICE\n/setcategory SERVER_ID SERVICE Category Name\n/listbots\n/addserver SERVER_ID KEY\n/rotatekey SERVER_ID NEW_KEY\n/listservers /removeserver SERVER_ID\nServices: systemd unit or pm2:name", chat)
+    elif cmd in ("/addserver", "/rotatekey"):
+        if len(parts) != 3 or not valid_server_id(parts[1]) or not 24 <= len(parts[2]) <= 256:
+            send("Usage: " + cmd + " SERVER_ID SECRET_KEY (24-256 characters). Use a random key.", chat)
+            return
+        server, key = parts[1], parts[2]
+        if cmd == "/rotatekey" and not registered(server):
+            send("Server not registered.", chat)
+            return
+        save_server_key(server, key)
+        send("Server " + html.escape(server) + " saved. Configure SERVER_ID and AGENT_KEY on its agent VPS; restart the agent.", chat)
+    elif cmd == "/listservers":
+        rows = sql("SELECT server_id,enabled FROM agent_credentials ORDER BY server_id", fetch=True)
+        found = {r["server_id"]: bool(r["enabled"]) for r in rows}
+        for server in KEYS:
+            found.setdefault(server, True)
+        names = [html.escape(k) + (" — active" if v else " — disabled") for k,v in sorted(found.items())]
+        send("Registered servers (keys hidden):\n" + ("\n".join(names) or "None"), chat)
+    elif cmd == "/removeserver":
+        if len(parts) != 2 or not valid_server_id(parts[1]):
+            send("Usage: /removeserver SERVER_ID", chat)
+            return
+        server = parts[1]
+        sql("""INSERT INTO agent_credentials(server_id,key_hash,enabled)
+            VALUES(%s,%s,0) ON DUPLICATE KEY UPDATE enabled=0""", (server, "0"*64))
+        sql("UPDATE monitored_bots SET enabled=0,status='unknown' WHERE server_id=%s", (server,))
+        send("Server disabled and its monitored bots removed from dashboard. Use /addserver to re-enable.", chat)
     elif cmd == "/status":
         send(dashboard(), chat)
     elif cmd == "/refresh":
@@ -155,8 +202,8 @@ def command(text, chat):
         rows = sql("SELECT server_id,service,display_name,category,enabled FROM monitored_bots ORDER BY server_id,service", fetch=True)
         send("\n".join(f'{html.escape(r["server_id"])} | {html.escape(r["service"])} | {html.escape(r["display_name"])} | {html.escape(r["category"])} | {"enabled" if r["enabled"] else "disabled"}' for r in rows)[:3900] or "No bots configured.",chat)
     elif cmd == "/addbot":
-        if len(parts) < 4 or parts[1] not in KEYS:
-            send("Usage: /addbot SERVER_ID SERVICE Display Name\nSERVER_ID must be configured in AGENT_KEYS.", chat)
+        if len(parts) < 4 or not registered(parts[1]):
+            send("Usage: /addbot SERVER_ID SERVICE Display Name\nRegister server with /addserver first.", chat)
             return
         server,service,name = parts[1],parts[2]," ".join(parts[3:])
         if len(service)>160 or len(name)>160:
@@ -180,7 +227,13 @@ def telegram_loop():
                 msg = update.get("message", {})
                 if msg.get("chat",{}).get("type") != "private" or msg.get("from",{}).get("id") != OWNER:
                     continue
-                command(msg.get("text",""),msg["chat"]["id"])
+                incoming = msg.get("text", "")
+                if incoming.split(" ", 1)[0].split("@")[0].lower() in ("/addserver", "/rotatekey"):
+                    try:
+                        telegram("deleteMessage", chat_id=msg["chat"]["id"], message_id=msg["message_id"])
+                    except Exception:
+                        logging.warning("Could not delete owner key command from private chat")
+                command(incoming,msg["chat"]["id"])
         except Exception:
             logging.exception("Telegram polling error")
             time.sleep(5)
