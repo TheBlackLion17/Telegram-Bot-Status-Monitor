@@ -174,7 +174,7 @@ def owner_menu(chat, message_id=None, page="home"):
         entries = sql("SELECT id,display_name,server_id,status FROM monitored_bots WHERE enabled=1 ORDER BY display_name,id LIMIT 9 OFFSET %s", (index * 9,), True)
         total = sql("SELECT COUNT(*) AS n FROM monitored_bots WHERE enabled=1", fetch=True)[0]["n"]
         body = "🤖 <b>MANAGE BOTS</b>\nTap a bot to manage or remove it.\nPage " + str(index + 1)
-        buttons = [[(("🟢 " if b["status"] == "online" else "🔴 " if b["status"] == "offline" else "⚪ ") + b["display_name"])[:55], "ui:bot:" + str(b["id"])] for b in entries]
+        buttons = [[((("🟢 " if b["status"] == "online" else "🔴 " if b["status"] == "offline" else "⚪ ") + b["display_name"])[:55], "ui:bot:" + str(b["id"]))] for b in entries]
         nav = []
         if index > 0:
             nav.append(("⬅️ Previous", "ui:bots:" + str(index - 1)))
